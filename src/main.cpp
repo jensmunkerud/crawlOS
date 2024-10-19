@@ -18,6 +18,8 @@
 // PARAMETERS
 float engineSpeed = 1;
 float turningSpeed = 1;
+int mappedX;
+int mappedY;
 
 Servo Servo1;
 Servo Servo2;
@@ -94,29 +96,26 @@ class Motor {
 			myPin = pin;
 		}
 
-	String update() {
-		analogWrite(myPin, mySpeed);
-		return "I am a motor connected to pin " + String(myPin);
+	void update(int speed) {
+		analogWrite(myPin, speed);
 	}
 
 	void stop() {
-		mySpeed = 0;
-		update();
+		update(0);
 	}
 };
-
 Motor motors[] = {Motor(mot1), Motor(mot2), Motor(mot3), Motor(mot4)};
 
-void loop() {
-	// TICKS MOTORS
+void updateQuadDrive(int x, int y) {
+	// Handle controlling actual output of 4 motors
 	for (int i = 0; i < 4; i++) {
-		Serial.println(motors[i].update());
-		delay(50);
+		motors[i].update(y);
 	}
+}
 
+void loop() {
 	// LOOKS FOR BLUETOOTH DEVICES
 	BLEDevice central = BLE.central();
-	delay(100);
 	if (central) {
 		// While the phone is connected
 		Serial.println("Connected to central device");
@@ -124,15 +123,22 @@ void loop() {
 		while (central.connected()) {
 			// Read the X, Y data sent by the joystick app
 			if (xCharacteristic.written()) {
-				int xData = xCharacteristic.value();
-				Serial.print("X: "); Serial.println(xData);
+				int8_t xData = xCharacteristic.value();
+				mappedX = map(xData, -126, 126, -255, 255);
+				Serial.print("X: "); Serial.println(mappedX);
 			}
 			if (yCharacteristic.written()) {
-				int yData = yCharacteristic.value();
-				Serial.print("Y: "); Serial.println(yData);
+				int8_t yData = yCharacteristic.value();
+				mappedY = map(yData, -126, 126, -255, 255);
+				Serial.print("Y: "); Serial.println(mappedY);
 			}
+			updateQuadDrive(mappedX, mappedY);
 		}
+	// Important to keep the {} this way, since then this code runs ONCE after disconnection, not in the "actual" loop...
 	Serial.println("Disconnected from central device");
 	digitalWrite(LED_BUILTIN, LOW);
+	for (int i = 0; i < 4; i++) {
+		motors[i].update(0);
+	}
 	}
 }
