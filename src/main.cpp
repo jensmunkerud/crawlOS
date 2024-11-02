@@ -1,144 +1,134 @@
 #include <Arduino.h>
-#include <Servo.h>
 #include <ArduinoBLE.h>
-
-// Sets pins
-#define mot1	2
-#define mot1Dir	3
-#define mot2	4
-#define mot2Dir	5
-#define mot3	6
-#define mot3Dir	7
-#define mot4	8
-#define mot4Dir	9
-#define ser1	21
-#define ser2	22
-#define ser3	23
+#include <Wire.h>
+#include <secrets.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+// #include <Servo.h>
+Adafruit_SSD1306 display(128, 64, &Wire, -1);
+#define I2CSlave 9
 
 // PARAMETERS
-float engineSpeed = 1;
-float turningSpeed = 1;
-int mappedX;
-int mappedY;
+unsigned long currentMillis = 0;
+unsigned long previousMillis = 0;
+int16_t xData = 0;
+int16_t yData = 0;
+String rawData;
 
-Servo Servo1;
-Servo Servo2;
-Servo Servo3;
-
-const char * serviceUUID = "ceeeeeee-c666-499f-b917-352312f159c5";
-const char * xDataUUID = "aaaaaaaa-d2a0-44c8-a271-69ef24094b01";
-const char * yDataUUID = "bbbbbbbb-f0a9-4623-b503-ee7804fca301";
+// Sets bluetooth characteristics
+const char * serviceUUID = sUUID;
+const char * xDataUUID = xUUID;
+const char * yDataUUID = yUUID;
 BLEService joystickService(serviceUUID);
-BLEIntCharacteristic xCharacteristic(xDataUUID, BLEWrite); // String characteristic for X, Y data
-BLEIntCharacteristic yCharacteristic(yDataUUID, BLEWrite); // String characteristic for X, Y data
+BLEIntCharacteristic xCharacteristic(xDataUUID, BLEWriteWithoutResponse); // String characteristic for X, Y data
+BLEIntCharacteristic yCharacteristic(yDataUUID, BLEWriteWithoutResponse); // String characteristic for X, Y data
 
-// MUST USE PIN 2 FOR THESE TYPES OF INPUTS (I THINK)
-const int FG_PIN = 13; // Interrupt pin for FG signal (digital pin 2 on Arduino UNO)
-const int pulsesPerRevolution = 6; // 6 FG pulses per revolution
-unsigned long previousMillis = 0;  // To store the last time calculation was done
-const unsigned long interval = 1000; // Interval for calculating RPM (1 second)
-volatile int pulseCount = 0;  // Pulse counter
-float rpm = 0;				// Motor speed in RPM
-
-// Interrupt Service Routine (ISR) to count pulses
-// void countPulses() {
-// 	pulseCount++;
-// }
-// int getRPM(int pin) {
-// 	unsigned long currentMillis = millis();
-// 	int count = 0;
-// 	if (currentMillis - previousMillis >= interval) {
-// 	// Disable interrupts to safely read pulseCount
-// 		noInterrupts();
-// 		count = pulseCount;
-// 		pulseCount = 0;  // Reset the counter
-// 		interrupts();
-// 	}
-// 	previousMillis = currentMillis;
-// 	// Calculate RPM
-// 	return rpm = (count / (float)pulsesPerRevolution) * (60.0 / (interval / 1000.0));
-// }
+struct XY {
+	int x;
+	int y;
+};
 
 // PROGRAM START
-void setup() {
-	pinMode(mot1, OUTPUT);
-	pinMode(mot2, OUTPUT);
-	pinMode(mot3, OUTPUT);
-	pinMode(mot4, OUTPUT);
-	pinMode(FG_PIN, INPUT);
-	pinMode(LED_BUILTIN, OUTPUT);
-	Servo1.attach(ser1);
-	Servo2.attach(ser2);
-	Servo3.attach(ser3);
-
-	Serial.begin(9600);
-	// attachInterrupt(digitalPinToInterrupt(FG_PIN), countPulses, RISING);
-
-	// STARTS BLUETOOTH
-	if (!BLE.begin()) {
-		Serial.println("starting BLE failed!");
-		while (1);
-	}
+void advertiseBLE() {
 	// SETS BLUETOOTH PARAMETERS
-	BLE.setLocalName("RP2040 Joystick");
+	BLE.setLocalName("CRAWLER");
 	BLE.setAdvertisedService(joystickService);
 	joystickService.addCharacteristic(xCharacteristic);
 	joystickService.addCharacteristic(yCharacteristic);
 	BLE.addService(joystickService);
 	BLE.advertise();
+	Serial.println("BLE is advertising...");
 }
 
-class Motor {
-	public:
-		int mySpeed;
-		int myPin;
-		Motor(int pin) {
-			myPin = pin;
-		}
+void startScreen() {
+	display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+	display.clearDisplay();
+	display.display();
+	display.setTextColor(1);
+	display.setTextSize(2);
+}
 
-	void update(int speed) {
-		analogWrite(myPin, speed);
+void updateScreen() {
+	display.clearDisplay();
+	display.setCursor(0, 0);
+	display.print("x = ");
+	display.print(xData);
+	display.setCursor(0, 20);
+	display.print("y = ");
+	display.print(yData);
+	display.setCursor(0, 40);
+	display.print(rawData);
+	display.display();
+}
+
+void setup() {
+	pinMode(LED_BUILTIN, OUTPUT);
+
+	// Starts I2C as MASTER
+	Wire.begin(); 
+	Serial.begin(9600);
+	startScreen();
+	// Starts Bluetooth
+	if (!BLE.begin()) {
+		Serial.println("starting BLE failed!");
+		while (1);
 	}
+	advertiseBLE();
+}
 
-	void stop() {
-		update(0);
+// Transmit XY data to I2C device
+void sendSlave(XY XYdata) {
+	Wire.beginTransmission(I2CSlave);
+	String data = String(XYdata.x) + "," + String(XYdata.y);
+	Wire.write(data.c_str());
+	Wire.endTransmission();
+	Serial.print("Sent x: "); Serial.print(int(XYdata.x)); Serial.print("    y: "); Serial.println(int(XYdata.y));
+}
+
+// Read the XY data sent by the joystick, and forwarding to slaves
+void receiveBLEData() {
+	if (xCharacteristic.written()) {
+		xCharacteristic.readValue((int16_t*)&xData, sizeof(int16_t));
 	}
-};
-Motor motors[] = {Motor(mot1), Motor(mot2), Motor(mot3), Motor(mot4)};
-
-void updateQuadDrive(int x, int y) {
-	// Handle controlling actual output of 4 motors
-	for (int i = 0; i < 4; i++) {
-		motors[i].update(y);
+	if (yCharacteristic.written()) {
+		yCharacteristic.readValue((int16_t*)&yData, sizeof(int16_t));
+		sendSlave({xData, yData});
 	}
 }
 
 void loop() {
-	// LOOKS FOR BLUETOOTH DEVICES
+	// Waits for BLE device to connect
 	BLEDevice central = BLE.central();
 	if (central) {
-		// While the phone is connected
 		Serial.println("Connected to central device");
 		digitalWrite(LED_BUILTIN, HIGH);
 		while (central.connected()) {
-			// Read the X, Y data sent by the joystick app
-			if (xCharacteristic.written()) {
-				int8_t xData = xCharacteristic.value();
-				mappedX = map(xData, -126, 126, -255, 255);
-				Serial.print("X: "); Serial.println(mappedX);
+			// While the phone is connected
+			receiveBLEData();
+
+			// Happens once a second while connected
+			unsigned long currentMillis = millis();
+			if (currentMillis - previousMillis >= 100) {
+				previousMillis = currentMillis;
+				Wire.requestFrom(I2CSlave, 20);
+				while (Wire.available()) {
+					char c = Wire.read();               // Read each byte from the slave
+					rawData += c;
+				}
+				updateScreen();
+				rawData = "";
 			}
-			if (yCharacteristic.written()) {
-				int8_t yData = yCharacteristic.value();
-				mappedY = map(yData, -126, 126, -255, 255);
-				Serial.print("Y: "); Serial.println(mappedY);
-			}
-			updateQuadDrive(mappedX, mappedY);
 		}
-	// Important to keep the {} this way, since then this code runs ONCE after disconnection, not in the "actual" loop...
 	Serial.println("Disconnected from central device");
 	digitalWrite(LED_BUILTIN, LOW);
-	for (int i = 0; i < 4; i++) {
-		motors[i].update(0);
+	advertiseBLE();
+	sendSlave({0, 0});
 	}
+	// Blinks LED_BUILTIN when we are searching for bluetooth devices
+	unsigned long currentMillis = millis();
+	if (currentMillis - previousMillis >= 1000) {
+		previousMillis = currentMillis;
+		digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
 	}
 }
+	
