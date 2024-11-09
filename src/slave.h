@@ -1,4 +1,4 @@
-#include <Wire.h>
+#include <SPI.h>
 
 // Sets pins
 #define mot1		3	// Blue
@@ -10,34 +10,34 @@
 #define mot4		9
 #define mot4Dir		8
 
-// REDEFINE THESE
-#define pistonInnerExt	10
-#define pistonInnerRetr	11
-#define pistonOuterExt	12
-#define pistonOuterRetr	13
+#define pistonInnerExt	A4
+#define pistonInnerRetr	A5
+#define pistonOuterExt	A6
+#define pistonOuterRetr	A7
 
 #define mot1RPM A0	// Yellow
 #define mot2RPM A1
 #define mot3RPM A2
 #define mot4RPM A3
 
-#define slaveID		1
+// SPI Variables
+const byte bufferSize = 32;      // Adjust size as needed for data length
+volatile byte receivedIndex = 0;  // Index for buffer
+volatile bool dataReceived = false;
+char receivedData[bufferSize];    // Buffer to hold received data
 
-// Variables to store pulse counts and last state for each motor
-unsigned long pulseCount1 = 0;
-unsigned long pulseCount2 = 0;
-unsigned long pulseCount3 = 0;
-unsigned long pulseCount4 = 0;
-int lastState1 = LOW;
-int lastState2 = LOW;
-int lastState3 = LOW;
-int lastState4 = LOW;
+// RPM Variables
+int motRPM[] = {mot1RPM, mot2RPM, mot3RPM, mot4RPM};
+byte rpmValues[4] = {8, 16, 32, 64};
+int currentState[4] = {0, 0, 0, 0};
+int lastState[4] = {0, 0, 0, 0};
+int pulseCount[4] = {0, 0, 0, 0};
+float rpm[4] = {0, 0, 0, 0};
 unsigned long lastMillis = 0; // Last time RPM was calculated
 const unsigned long rpmCalcInterval = 1000; // Interval to calculate RPM (in ms)
-float rpm1 = 0;
-float rpm2 = 0;
-float rpm3 = 0;
-float rpm4 = 0;
+volatile int rpmIndex = 1;
+volatile bool wantRPM = false;
+
 
 // PARAMETERS
 float smoothness = 255;		// units / sec		(disable = 0)
@@ -46,27 +46,16 @@ float currentY = 0;
 bool hasUpdated;
 unsigned long currentMillis;
 unsigned long previousMillis = 0;
-
 int x, y;
 int smooth = 1;
 int exOuter = 0;
 int exInner = 0;
-int comma1, comma2, comma3, comma4;
-String rawData;
 
-void sendRPM() {
-	Wire.write(int(rpm1));
-	Wire.write(int(rpm2));
-	Wire.write(int(rpm3));
-	Wire.write(int(rpm4));
-}
 
 void setup() {
-	// Starts I2C as SLAVE
-	Wire.begin(slaveID);
-	Wire.setTimeout(3000);
-	Wire.onReceive(getData);
-	Wire.onRequest(sendRPM);
+	pinMode(MISO, OUTPUT);
+	SPCR |= _BV(SPE); 		// Enable SPI in Slave mode
+	SPI.attachInterrupt();
 	Serial.begin(9600);
 }
 
@@ -118,44 +107,27 @@ void smoothValue() {
 	}
 }
 
-void getData(int bytes) {
-	// Loop through all received bytes, receive byte as a character
-	char rawData[32];
-	int index = 0;
-	while (Wire.available() && index < sizeof(rawData) - 1) {
-		rawData[index++] = Wire.read();
-	}
-	rawData[index] = '\0';  // Null-terminate the string
+void getData(char *data) {
+  // Parse the received comma-separated data
+	char *token = strtok(data, ",");
+	if (token != NULL) x = atoi(token);
 
-	// Parse the data
-	char *ptr = strtok(rawData, ",");
-	x = atoi(ptr);
-	ptr = strtok(NULL, ",");
-	y = atoi(ptr);
-	ptr = strtok(NULL, ",");
-	smooth = atoi(ptr);
-	ptr = strtok(NULL, ",");
-	exInner = atoi(ptr);
-	ptr = strtok(NULL, ",");
-	exOuter = atoi(ptr);
+	token = strtok(NULL, ",");
+	if (token != NULL) y = atoi(token);
 
-	// while (Wire.available()) {
-	// 	char c = Wire.read();
-	// 	rawData += c;
-	// }
-	// // Decodes data
-	// comma1 = 	rawData.indexOf(',');
-	// comma2 = 	rawData.indexOf(',', comma1 + 1);
-	// comma3 = 	rawData.indexOf(',', comma2 + 1);
-	// comma4 = 	rawData.indexOf(',', comma3 + 1);
-	// x = 		rawData.substring(0, comma1).toInt();
-	// y = 		rawData.substring(comma1 + 1).toInt();
-	// smooth = 	rawData.substring(comma2 + 1, comma3).toInt();
-	// exInner = 	rawData.substring(comma3 + 1, comma4).toInt();
-	// exOuter = 	rawData.substring(comma4 + 1).toInt();
-	// rawData = "";
+	token = strtok(NULL, ",");
+	if (token != NULL) smooth = atoi(token);
 
+	token = strtok(NULL, ",");
+	if (token != NULL) exInner = atoi(token);
 
+	token = strtok(NULL, ",");
+	if (token != NULL) exOuter = atoi(token);
+	Serial.print(x); Serial.print(", "); 
+	Serial.print(y); Serial.print(", "); 
+	Serial.print(smooth); Serial.print(", "); 
+	Serial.print(exInner); Serial.print(", "); 
+	Serial.println(exOuter);
 	movePiston(true, exInner);
 	movePiston(false, exOuter);
 	if (smooth == 0) {
@@ -167,7 +139,7 @@ void getData(int bytes) {
 
 
 void movePiston(bool Inner, int val) {
-	Serial.print("wrote "); Serial.print(val > 0 ? "HIGH" : "LOW"); Serial.print(" to "); Serial.println(Inner ? "pistonInnerExt" : "pistonOuterExt");
+	// Serial.print("wrote "); Serial.print(val > 0 ? "HIGH" : "LOW"); Serial.print(" to "); Serial.println(Inner ? "pistonInnerExt" : "pistonOuterExt");
 	digitalWrite(Inner ? pistonInnerExt : pistonOuterExt,   val > 0 ? HIGH : LOW);
 	digitalWrite(Inner ? pistonInnerRetr : pistonOuterRetr, val < 0 ? HIGH : LOW);
 	if (Inner and val == 0) {
@@ -175,45 +147,66 @@ void movePiston(bool Inner, int val) {
 	}
 }
 
+
 void countRPM() {
-	int currentState1 = digitalRead(mot1RPM);
-	int currentState2 = digitalRead(mot2RPM);
-	int currentState3 = digitalRead(mot3RPM);
-	int currentState4 = digitalRead(mot4RPM);
-
 	// Detect rising edge for each motor and count pulses
-	if (currentState1 == HIGH && lastState1 == LOW) pulseCount1++;
-	if (currentState2 == HIGH && lastState2 == LOW) pulseCount2++;
-	if (currentState3 == HIGH && lastState3 == LOW) pulseCount3++;
-	if (currentState4 == HIGH && lastState4 == LOW) pulseCount4++;
-
-	// Update last state
-	lastState1 = currentState1;
-	lastState2 = currentState2;
-	lastState3 = currentState3;
-	lastState4 = currentState4;
-
+	for (int i = 0; i < 4; i++) {
+		currentState[i] = digitalRead(motRPM[i]); // motRPM[] contains the motor pins
+		if (currentState[i] == HIGH && lastState[i] == LOW) {
+			pulseCount[i]++;
+		}
+		lastState[i] = currentState[i];
+	}
 	// Calculate RPM every rpmCalcInterval milliseconds
 	if (millis() - lastMillis >= rpmCalcInterval) {
 		lastMillis = millis();
-
-		// Calculate RPM
-		rpm1 = (pulseCount1 * 60.0) / (rpmCalcInterval * 0.56925);
-		rpm2 = (pulseCount2 * 60.0) / (rpmCalcInterval * 0.56925);
-		rpm3 = (pulseCount3 * 60.0) / (rpmCalcInterval * 0.56925);
-		rpm4 = (pulseCount4 * 60.0) / (rpmCalcInterval * 0.56925);
-		// Reset pulse counts for the next interval
-		pulseCount1 = 0;
-		pulseCount2 = 0;
-		pulseCount3 = 0;
-		pulseCount4 = 0;
-		// Serial.print("mot1: "); Serial.print(rpm1); Serial.print("   mot2: "); Serial.println(rpm2);
+		// Calculate RPM for each motor
+		for (int i = 0; i < 4; i++) {
+			rpm[i] = min((pulseCount[i] * 60.0) / (rpmCalcInterval * 0.56925), 255);
+			pulseCount[i] = 0; // Reset pulse count for next interval
+		}
+		// Serial.print("mot1: "); Serial.print(rpm[0]); Serial.print("   mot2: "); Serial.println(rpm[1]);
 	}
 }
 
 
 void loop() {
+	countRPM();
 	if (smooth == 1) {smoothValue();}
-	// countRPM();
+	if (dataReceived) {
+		dataReceived = false;
+		getData(receivedData);
+	}
+	rpmValues[0] = analogRead(A2)*100;
 }
 
+
+ISR(SPI_STC_vect) {
+	if (wantRPM) {
+		SPDR = rpmValues[rpmIndex];
+		rpmIndex++;
+		if (rpmIndex >= 4) {
+			rpmIndex = 1;	// Start rpmIndex at 1, since initial function call sets rpmValues[0]
+			wantRPM = false;
+		}
+	} else {
+		char receivedByte = SPDR;
+		if (receivedByte == 'r') { // On the next 4 calls of this function, return RPM[i]
+			wantRPM = true;
+			SPDR = rpmValues[0];	// Sends initial rpmVal...
+		}
+
+		// Regular x, y, smooth, exInner, exOuter data received
+		if (receivedIndex < bufferSize - 1) {
+			receivedData[receivedIndex++] = receivedByte;
+			if (receivedByte == '\n') {  // Newline marks end of data packet
+				dataReceived = true;
+				receivedData[receivedIndex] = '\0'; // Null-terminate the string
+				receivedIndex = 0; // Reset for next transmission
+			}
+		} else {
+		// Buffer overflow, reset buffer
+		receivedIndex = 0;
+		}
+	}
+}

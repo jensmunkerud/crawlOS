@@ -1,16 +1,14 @@
 #include <Arduino.h>
 #include <ArduinoBLE.h>
-#include <Wire.h>
+#include <SPI.h>
 #include <secrets.h>
-#include <Adafruit_I2CDevice.h>
-// #include <Adafruit_GFX.h>
-// #include <Adafruit_SSD1306.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 // #include <Servo.h>
-// Adafruit_SSD1306 display(128, 64, &Wire, -1);
-int slaveID1 = 1;
-int slaveID2 = 2;
-#define I2C_ADDRESS 0x60
-Adafruit_I2CDevice i2c_dev = Adafruit_I2CDevice(I2C_ADDRESS);
+Adafruit_SSD1306 display(128, 64, &Wire, -1);
+int slavePin1 = 10;
+int slavePin2 = 9;
 
 // PARAMETERS
 unsigned long currentMillis = 0;
@@ -22,9 +20,9 @@ int8_t exInner = 0;			// 1 extend, 0 nothing, -1 retract
 int8_t exOuter = 0;			// 1 extend, 0 nothing, -1 retract
 int8_t smooth = 1;			// 0 instant, 1 default smoothness
 int8_t switcher = 0;		// 0 both, 1 lower, 2 upper
-int RPMCounts[4];
+int rpmData[2][4] = {{0, 0, 0, 0},
+					 {0, 0, 0, 0}};
 bool dataReceived;
-int talkingSlaves[2] = {slaveID1, slaveID2};
 
 // Sets bluetooth characteristics
 const char * serviceUUID = sUUID;
@@ -42,7 +40,7 @@ BLEIntCharacteristic exOuterCharacteristic(exOuterUUID, BLEWriteWithoutResponse)
 BLEIntCharacteristic smoothCharacteristic(smoothUUID, BLEWrite);
 BLEIntCharacteristic stageCharacteristic(stageUUID, BLEWrite);
 
-struct I2CData {
+struct SPIData {
 	int x;
 	int y;
 	int smooth;
@@ -66,80 +64,80 @@ void advertiseBLE() {
 	Serial.println("BLE is advertising...");
 }
 
-// void startScreen() {
-// 	display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
-// 	display.clearDisplay();
-// 	display.display();
-// 	display.setTextColor(1);
-// 	display.setTextSize(2);
-// }
+void startScreen() {
+	display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+	display.clearDisplay();
+	display.display();
+	display.setTextColor(1);
+	display.setTextSize(2);
+	Wire.begin();
+}
 
-// void updateScreen() {
-// 	display.clearDisplay();
-// 	display.setCursor(0, 0);
-// 	// display.print("x = ");
-// 	// display.print(xData);
-// 	// display.setCursor(0, 20);
-// 	// display.print("y = ");
-// 	// display.print(yData);
-// 	display.print("mot1: ");
-// 	display.print(RPMCounts[0]);
-// 	display.setCursor(0, 20);
-// 	display.print("mot2: ");
-// 	display.print(RPMCounts[1]);
-// 	display.display();
-// }
+void updateScreen() {
+	display.clearDisplay();
+	display.setCursor(0, 0);
+	// display.print("x = ");
+	// display.print(xData);
+	// display.setCursor(0, 20);
+	// display.print("y = ");
+	// display.print(yData);
+	display.print("mot1: ");
+	display.print(rpmData[0][0]);
+	display.setCursor(0, 20);
+	display.print("mot2: ");
+	display.print(rpmData[0][1]);
+	display.display();
+}
+
+
 
 // Transmit XY data to I2C device
-void sendSlaveInstance(I2CData I2CData, int slave) {
-	Wire.beginTransmission(slave);
+void sendSlaveInstance(SPIData SPIData, int slave) {
+	digitalWrite(slave, LOW); // Enables comms with selected slave
 	String data = 
-	String(I2CData.x)+","+
-	String(I2CData.y)+","+
-	String(I2CData.smooth)+","+
-	String(I2CData.exInner)+","+
-	String(I2CData.exOuter);
-	Wire.write(data.c_str());
-	// unsigned long start = millis();
-	// while (Wire.endTransmission() != 0) {  // Check if transmission is successful
-	// 	if (millis() - start > 10000) {  // Timeout after 100 ms
-	// 		Serial.print("I2C timeout on slave "); Serial.println(slave);
-	// 		break;
-	// 	}
-	// }
-	Wire.endTransmission();
-	Serial.print("Wrote to slave "); Serial.println(slave);
-	// Serial.print("Sent x: "); Serial.print(int(I2CData.x)); Serial.print("    y: "); Serial.println(int(I2CData.y));
+	String(SPIData.x)+","+
+	String(SPIData.y)+","+
+	String(SPIData.smooth)+","+
+	String(SPIData.exInner)+","+
+	String(SPIData.exOuter)+"\n";
+
+	int dataLength = data.length();
+	byte dataBytes[dataLength + 1];
+	data.getBytes(dataBytes, dataLength + 1);
+
+	SPI.beginTransaction(SPISettings(4000000, MSBFIRST, SPI_MODE0));
+
+	for (int i = 0; i < dataLength; i++) {
+		SPI.transfer(dataBytes[i]);
+	}
+	SPI.endTransaction();
+	digitalWrite(slave, HIGH);
 }
 
 // Switches between upper, lower or both stages
-void sendSlave(I2CData I2CData, int switchLoc) {
+void sendSlave(SPIData I2CData, int switchLoc) {
 	// switcher 0 both, 1 upper, -1 lower
 	if (switchLoc == 1) {
-		sendSlaveInstance(I2CData, slaveID1);
+		sendSlaveInstance(I2CData, slavePin1);
 	}
 	if (switchLoc == 2) {
-		sendSlaveInstance(I2CData, slaveID2);
+		sendSlaveInstance(I2CData, slavePin2);
 	} else {
-		sendSlaveInstance(I2CData, slaveID1);
-		sendSlaveInstance(I2CData, slaveID2);
+		sendSlaveInstance(I2CData, slavePin1);
+		sendSlaveInstance(I2CData, slavePin2);
 	}
 }
 
 
 void setup() {
 	pinMode(LED_BUILTIN, OUTPUT);
-	Wire.begin();					// Starts I2C as MASTER
-	Wire.setTimeout(3000);
-	if (!i2c_dev.begin()) {
-		Serial.print("Did not find device at 0x");
-		Serial.println(i2c_dev.address(), HEX);
-		while (1);
-	}
+	pinMode(slavePin1, OUTPUT);		digitalWrite(slavePin1, HIGH);
+	pinMode(slavePin2, OUTPUT);		digitalWrite(slavePin2, HIGH);
+	SPI.begin();
 	Serial.begin(9600);
-	// startScreen();					// Starts screen
-	// updateScreen();					// Initilializes screen
-	// sendSlave({0, 0, 1, 0, 0}, 0);		// Stops all motors // THIS BUGS OUT ON STARTUP
+	startScreen();					// Starts screen
+	updateScreen();					// Initilializes screen
+	sendSlave({0, 0, 1, 0, 0}, switcher);		// Stops all motors // THIS BUGS OUT ON STARTUP
 	// Starts Bluetooth
 	if (!BLE.begin()) {
 		Serial.println("starting BLE failed!");
@@ -182,10 +180,32 @@ void receiveBLEData() {
 		dataReceived = true;
 	}
 	if (dataReceived) {
-		I2CData dat = {xData, yData, smooth, exOuter, exInner};
-		sendSlave(dat, switcher);
+		SPIData data = {xData, yData, smooth, exOuter, exInner};
+		sendSlave(data, switcher);
 		lastBLEPackage = millis();
 	}
+}
+
+
+void getRPM(int slave) {
+	SPI.beginTransaction(SPISettings(4000000, MSBFIRST, SPI_MODE0));
+	digitalWrite(slave, LOW);	// Enable the slave
+	SPI.transfer('r');			// Enables RPM Readback
+	for (int i = 0; i < 4; i++) {
+		delayMicroseconds(100);
+		rpmData[slave == 9 ? 1 : 0][i] = SPI.transfer(0);
+	}
+	digitalWrite(slave, HIGH); // Disable the slave
+	SPI.endTransaction();
+
+	// Print received RPM values
+	for (int i = 0; i < 4; i++) {
+		Serial.print("  RPM ");
+		Serial.print(i + 1);
+		Serial.print(": ");
+		Serial.print(rpmData[0][i]);
+	}
+	Serial.println();
 }
 
 void loop() {
@@ -198,23 +218,19 @@ void loop() {
 		while (central.connected()) {
 			// While the phone is connected
 			receiveBLEData();
-
 			// Happens once a second while connected
 			unsigned long currentMillis = millis();
-			// if (currentMillis - previousMillis >= 100) {
-			// 	previousMillis = currentMillis;
-			// 	Wire.requestFrom(slaveID1, 4);
-			// 	int i = 0;
-			// 	while (Wire.available() && i < 4) {
-			// 		RPMCounts[i] = (int8_t)Wire.read();
-			// 		i++;
-			// 	}
-			// 	updateScreen();
-			// }
+			if (currentMillis - previousMillis >= 1000) {
+				previousMillis = currentMillis;
+				getRPM(slavePin1);
+				updateScreen();
+			}
+			
+			// Bluetooth timeout after 10s
 			if (currentMillis - lastBLEPackage > 10000) {
 				Serial.println("Bluetooth timed out");
 				BLE.disconnect();
-				if (!central.connected()) break;  // Confirm disconnection
+				if (!central.connected()) break;
 			}
 		}
 	Serial.println("Disconnected from central device");
@@ -222,7 +238,7 @@ void loop() {
 	advertiseBLE();
 	sendSlave({0, 0, 1, 0, 0}, 0);		// Stops all motors
 	xData = 0; yData = 0;
-	// updateScreen();
+	updateScreen();
 	}
 	// Blinks LED_BUILTIN when we are searching for bluetooth devices
 	unsigned long currentMillis = millis();
