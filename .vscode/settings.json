@@ -1,7 +1,0 @@
-{
-	"files.associations": {
-		"*.py": "python",
-		"iosfwd": "cpp",
-		"iostream": "cpp"
-	}
-}
