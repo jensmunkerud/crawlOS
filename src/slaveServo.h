@@ -1,14 +1,11 @@
 #include <SPI.h>
+#include <Servo.h>
 
 // Sets pins
-#define mot1		3	// Blue
-#define mot1Dir		2	// White
-#define mot2		5
-#define mot2Dir		4
-#define mot3		6
-#define mot3Dir		7
-#define mot4		9
-#define mot4Dir		8
+#define servo1Pin 2
+#define servo2Pin 3
+Servo servo1;
+Servo servo2;
 
 #define pistonInnerExt	A4
 #define pistonInnerRetr	A5
@@ -57,6 +54,8 @@ void setup() {
 	SPCR |= _BV(SPE); 		// Enable SPI in Slave mode
 	SPI.attachInterrupt();
 	Serial.begin(9600);
+	servo1.attach(servo1Pin);
+	servo2.attach(servo2Pin);
 }
 
 
@@ -79,15 +78,12 @@ class Motor {
 		analogWrite(myPin, abs(speed));
 	}
 };
-Motor motors[] = {Motor(mot1, mot1Dir, mot1RPM), Motor(mot2, mot2Dir, mot2RPM), Motor(mot3, mot3Dir, mot3RPM), Motor(mot4, mot4Dir, mot4RPM)};
 
 
 void updateQuadDrive(int x, int y) {
 	Serial.print("x: "); Serial.print(x); Serial.print("	y: "); Serial.println(y);
-	motors[0].update(x);
-	motors[1].update(y);
-	motors[2].update(x);
-	motors[3].update(y);
+	servo1.write(x);
+	servo2.write(y);
 }
 
 

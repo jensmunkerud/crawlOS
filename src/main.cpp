@@ -7,6 +7,11 @@
 #include <Adafruit_SSD1306.h>
 // #include <Servo.h>
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
+// Bluetooth Logo
+const unsigned char BLELogo [] PROGMEM = {
+	0x00, 0xc0, 0x00, 0xa0, 0x00, 0x90, 0x08, 0x88, 0x04, 0x90, 0x02, 0xa0, 0x01, 0xc0, 0x00, 0x80, 
+	0x01, 0xc0, 0x02, 0xa0, 0x04, 0x90, 0x08, 0x88, 0x00, 0x90, 0x00, 0xa0, 0x00, 0xc0, 0x00, 0x80
+};
 int slavePin1 = 10;
 int slavePin2 = 9;
 
@@ -18,7 +23,7 @@ int16_t xData = 0;
 int16_t yData = 0;
 int8_t exInner = 0;			// 1 extend, 0 nothing, -1 retract
 int8_t exOuter = 0;			// 1 extend, 0 nothing, -1 retract
-int8_t smooth = 1;			// 0 instant, 1 default smoothness
+int8_t smooth = 1;			// 0 instant, 1 default smoothness, -1 instant stop
 int8_t switcher = 0;		// 0 both, 1 lower, 2 upper
 int rpmData[2][4] = {{0, 0, 0, 0},
 					 {0, 0, 0, 0}};
@@ -39,6 +44,7 @@ BLEIntCharacteristic exInnerCharacteristic(exInnerUUID, BLEWriteWithoutResponse)
 BLEIntCharacteristic exOuterCharacteristic(exOuterUUID, BLEWriteWithoutResponse);
 BLEIntCharacteristic smoothCharacteristic(smoothUUID, BLEWrite);
 BLEIntCharacteristic stageCharacteristic(stageUUID, BLEWrite);
+bool isBLEConnected = false;
 
 struct SPIData {
 	int x;
@@ -47,6 +53,7 @@ struct SPIData {
 	int exOuter;
 	int exInner;
 };
+
 
 // PROGRAM START
 void advertiseBLE() {
@@ -64,6 +71,7 @@ void advertiseBLE() {
 	Serial.println("BLE is advertising...");
 }
 
+
 void startScreen() {
 	display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
 	display.clearDisplay();
@@ -73,22 +81,25 @@ void startScreen() {
 	Wire.begin();
 }
 
+
 void updateScreen() {
 	display.clearDisplay();
 	display.setCursor(0, 0);
-	// display.print("x = ");
-	// display.print(xData);
-	// display.setCursor(0, 20);
-	// display.print("y = ");
-	// display.print(yData);
-	display.print("mot1: ");
-	display.print(rpmData[0][0]);
+	display.print("x = ");
+	display.print(xData);
 	display.setCursor(0, 20);
-	display.print("mot2: ");
-	display.print(rpmData[0][1]);
+	display.print("y = ");
+	display.print(yData);
+	display.setCursor(0, 40);
+
+	// display.print("mot1: ");
+	// display.print(rpmData[0][0]);
+	// display.setCursor(0, 20);
+	// display.print("mot2: ");
+	// display.print(rpmData[0][1]);
+	if (isBLEConnected) {display.drawBitmap(112, 0, BLELogo, 16, 16, WHITE);}
 	display.display();
 }
-
 
 
 // Transmit XY data to I2C device
@@ -114,6 +125,7 @@ void sendSlaveInstance(SPIData SPIData, int slave) {
 	digitalWrite(slave, HIGH);
 }
 
+
 // Switches between upper, lower or both stages
 void sendSlave(SPIData I2CData, int switchLoc) {
 	// switcher 0 both, 1 upper, -1 lower
@@ -130,7 +142,6 @@ void sendSlave(SPIData I2CData, int switchLoc) {
 
 
 void setup() {
-	pinMode(LED_BUILTIN, OUTPUT);
 	pinMode(slavePin1, OUTPUT);		digitalWrite(slavePin1, HIGH);
 	pinMode(slavePin2, OUTPUT);		digitalWrite(slavePin2, HIGH);
 	SPI.begin();
@@ -139,6 +150,7 @@ void setup() {
 	updateScreen();					// Initilializes screen
 	sendSlave({0, 0, 1, 0, 0}, switcher);		// Stops all motors // THIS BUGS OUT ON STARTUP
 	// Starts Bluetooth
+	delay(1000);
 	if (!BLE.begin()) {
 		Serial.println("starting BLE failed!");
 		while (1);
@@ -180,8 +192,8 @@ void receiveBLEData() {
 		dataReceived = true;
 	}
 	if (dataReceived) {
-		SPIData data = {xData, yData, smooth, exOuter, exInner};
-		sendSlave(data, switcher);
+		// SPIData data = {xData, yData, smooth, exOuter, exInner};
+		// sendSlave(data, switcher);
 		lastBLEPackage = millis();
 	}
 }
@@ -208,22 +220,25 @@ void getRPM(int slave) {
 	Serial.println();
 }
 
+
 void loop() {
 	// Waits for BLE device to connect
 	BLEDevice central = BLE.central();
 	if (central) {
 		Serial.println("Connected to central device");
-		digitalWrite(LED_BUILTIN, HIGH);
+		isBLEConnected = true;
 		lastBLEPackage = millis();
 		while (central.connected()) {
 			// While the phone is connected
 			receiveBLEData();
 			// Happens once a second while connected
 			unsigned long currentMillis = millis();
-			if (currentMillis - previousMillis >= 1000) {
+			if (currentMillis - previousMillis >= 100) {
 				previousMillis = currentMillis;
-				getRPM(slavePin1);
-				updateScreen();
+				// getRPM(slavePin1);
+				SPIData data = {xData, yData, smooth, exOuter, exInner};
+				sendSlave(data, switcher);
+				// updateScreen();
 			}
 			
 			// Bluetooth timeout after 10s
@@ -234,17 +249,19 @@ void loop() {
 			}
 		}
 	Serial.println("Disconnected from central device");
-	digitalWrite(LED_BUILTIN, LOW);
+	isBLEConnected = false;
 	advertiseBLE();
 	sendSlave({0, 0, 1, 0, 0}, 0);		// Stops all motors
 	xData = 0; yData = 0;
 	updateScreen();
 	}
-	// Blinks LED_BUILTIN when we are searching for bluetooth devices
+
+	// Blinks LED
 	unsigned long currentMillis = millis();
 	if (currentMillis - previousMillis >= 1000) {
 		previousMillis = currentMillis;
-		digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
+		// WiFiNINA lib. does not work with BLE
+		// digitalWrite(LEDG, HIGH);
 	}
 }
 	
